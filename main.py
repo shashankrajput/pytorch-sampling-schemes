@@ -17,6 +17,7 @@ from utils import progress_bar
 from torch.utils.data import RandomSampler
 import sys
 import time
+import random
 
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
@@ -52,11 +53,37 @@ class RandomSamplerSS(RandomSampler):
         self.epoch=1
         self.permutation=None
     def __iter__(self):
-        n = len(self.data_source)
         if self.epoch==1:
+            n = len(self.data_source)
             generator = torch.Generator()
             generator.manual_seed(int(torch.empty((), dtype=torch.int64).random_().item()))
             self.permutation = torch.randperm(n, generator=generator).tolist()
+            yield from self.permutation
+        else:
+            # self.permutation.reverse()
+            yield from self.permutation
+        self.epoch=self.epoch+1
+
+class RandomSamplerSS_classmix(RandomSampler):
+    def __init__(self, train_dataset):
+        super().__init__(train_dataset)
+        self.epoch=1
+        self.permutation=None
+    def __iter__(self):
+        if self.epoch==1:
+            class_indices={}
+            for (index, (_, label)) in enumerate(self.data_source):
+                if label not in class_indices:
+                    class_indices[label]=[]
+                class_indices[label].append(index)
+            
+            for label in class_indices:
+                random.shuffle(class_indices[label])
+            
+            self.permutation=[]
+            num_classes=len(class_indices)
+            for i in range(len(self.data_source)):
+                self.permutation.append(class_indices[i%num_classes][int(i/num_classes)])
             yield from self.permutation
         else:
             # self.permutation.reverse()
@@ -73,6 +100,8 @@ if sampling=="SGD":
     custom_sampler = RandomSampler(data_source=trainset, replacement=True)
 elif sampling=="SS":
     custom_sampler = RandomSamplerSS(trainset)
+elif sampling=="SS_mix":
+    custom_sampler = RandomSamplerSS_classmix(trainset)
 elif sampling=="RR":
     custom_sampler = RandomSampler(data_source=trainset)
 else:
