@@ -18,11 +18,10 @@ from torch.utils.data import RandomSampler
 import sys
 import time
 import random
+import pickle
 
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
-parser.add_argument('--resume', '-r', action='store_true',
-                    help='resume from checkpoint')
 
 parser.add_argument('--sampling', default=None, type=str, help='sampling type, one of RR, SS, or SGD')
 parser.add_argument('--model', default=None, type=str, help='model, one of VGG11, VGG13, VGG16, or VGG19')
@@ -30,8 +29,6 @@ parser.add_argument('--batchnorm', default=None, type=str, help='batchnorm, eith
 args = parser.parse_args()
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-best_acc = 0  # best test accuracy
-start_epoch = 0  # start from epoch 0 or last checkpoint epoch
 
 # Data
 print('==> Preparing data..')
@@ -60,7 +57,6 @@ class RandomSamplerSS(RandomSampler):
             self.permutation = torch.randperm(n, generator=generator).tolist()
             yield from self.permutation
         else:
-            # self.permutation.reverse()
             yield from self.permutation
         self.epoch=self.epoch+1
 
@@ -86,7 +82,6 @@ class RandomSamplerSS_classmix(RandomSampler):
                 self.permutation.append(class_indices[i%num_classes][int(i/num_classes)])
             yield from self.permutation
         else:
-            # self.permutation.reverse()
             yield from self.permutation
         self.epoch=self.epoch+1
 
@@ -109,6 +104,9 @@ else:
 
 trainloader = torch.utils.data.DataLoader(
     trainset, batch_size=128, sampler=custom_sampler, num_workers=2)
+
+trainloader_eval = torch.utils.data.DataLoader(
+    trainset, batch_size=128, shuffle=False, num_workers=2)
 
 testset = torchvision.datasets.CIFAR10(
     root='./data', train=False, download=True, transform=transform_test)
@@ -134,13 +132,12 @@ if batchnorm:
     btnm='batchnorm_true'
 
 print('==> Building model..')
-# print(model)
-# print(batchnorm)
-# print(btnm)
-# exit()
 
 net = VGG(model, batchnorm)
-# net = ResNet18()
+
+# model="ResNet101"
+# net = ResNet101()
+
 # net = PreActResNet18()
 # net = GoogLeNet()
 # net = DenseNet121()
@@ -159,15 +156,6 @@ if device == 'cuda':
     net = torch.nn.DataParallel(net)
     cudnn.benchmark = True
 
-if args.resume:
-    # Load checkpoint.
-    print('==> Resuming from checkpoint..')
-    assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
-    checkpoint = torch.load('./checkpoint/ckpt.pth')
-    net.load_state_dict(checkpoint['net'])
-    best_acc = checkpoint['acc']
-    start_epoch = checkpoint['epoch']
-
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.SGD(net.parameters(), lr=args.lr,
                       momentum=0.9, weight_decay=5e-4)
@@ -175,14 +163,11 @@ scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
 
 
 filename="./results/"+model+"_"+sampling+"_"+btnm
-
+print("Output will be written to "+filename)
 # Training
-def train(epoch, start_time):
-    print('\nEpoch: %d' % epoch)
+def train():
+    start_time=time.time()
     net.train()
-    # train_loss = 0
-    # correct = 0
-    # total = 0
     for batch_idx, (inputs, targets) in enumerate(trainloader):
         inputs, targets = inputs.to(device), targets.to(device)
         optimizer.zero_grad()
@@ -190,39 +175,26 @@ def train(epoch, start_time):
         loss = criterion(outputs, targets)
         loss.backward()
         optimizer.step()
+    return time.time()-start_time
 
-        # train_loss += loss.item()
-        # _, predicted = outputs.max(1)
-        # total += targets.size(0)
-        # correct += predicted.eq(targets).sum().item()
 
-        # progress_bar(batch_idx, len(trainloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
-        #              % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
-    
+# Evaluation
+def evaluate():
+    net.eval()
 
     train_loss = 0    
+    test_loss = 0
+    test_acc = 0
     with torch.no_grad():
-        for batch_idx, (inputs, targets) in enumerate(trainloader):
+        for batch_idx, (inputs, targets) in enumerate(trainloader_eval):
             inputs, targets = inputs.to(device), targets.to(device)
             outputs = net(inputs)
             loss = criterion(outputs, targets)
 
             train_loss += loss.item()
-    print(train_loss)
-    f = open(filename, "a")
-    f.write(str(epoch)+" "+str(train_loss)+" "+str(time.time()-start_time))
-    f.write("\n")
-    f.close()
-
-
-
-def test(epoch):
-    global best_acc
-    net.eval()
-    test_loss = 0
-    correct = 0
-    total = 0
-    with torch.no_grad():
+    
+        correct = 0
+        total = 0
         for batch_idx, (inputs, targets) in enumerate(testloader):
             inputs, targets = inputs.to(device), targets.to(device)
             outputs = net(inputs)
@@ -232,27 +204,37 @@ def test(epoch):
             _, predicted = outputs.max(1)
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
+            test_acc=100.0*correct/total
+    
 
-            progress_bar(batch_idx, len(testloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
-                         % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
+    evaluation = {}
+    evaluation['Training Loss']=train_loss
+    evaluation['Test Loss']=test_loss
+    evaluation['Test Accuracy']=test_acc
+    return evaluation
 
-    # Save checkpoint.
-    acc = 100.*correct/total
-    if acc > best_acc:
-        print('Saving..')
-        state = {
-            'net': net.state_dict(),
-            'acc': acc,
-            'epoch': epoch,
-        }
-        if not os.path.isdir('checkpoint'):
-            os.mkdir('checkpoint')
-        torch.save(state, './checkpoint/ckpt.pth')
-        best_acc = acc
 
-open(filename, 'w').close()
-start_time=time.time()
-for epoch in range(start_epoch, start_epoch+200):
-    train(epoch, start_time)
-    # test(epoch)
-    scheduler.step()
+num_epochs=200
+results=[]
+with open(filename, 'w') as f:
+    for epoch in range(0, num_epochs):
+        print('\nEpoch: %d' % epoch)
+        
+        train_time=train()
+        evaluation=evaluate()
+
+        epoch_result={}
+        epoch_result["Epoch"]=epoch
+        epoch_result["Training time"]=train_time
+        epoch_result.update(evaluation)
+        results.append(epoch_result)
+        
+        print(epoch_result)
+        f = open(filename, "a")
+        f.write(str(epoch_result)+os.linesep)
+        f.flush()
+
+        scheduler.step()
+
+with open(filename+".pkl",'wb') as f:
+    pickle.dump(results,f)
