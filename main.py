@@ -86,6 +86,29 @@ class RandomSamplerSS_classmix(RandomSampler):
         self.epoch=self.epoch+1
 
 
+class RandomSamplerRR_classmix(RandomSampler):
+    def __init__(self, train_dataset):
+        super().__init__(train_dataset)
+        self.epoch=1
+        self.permutation=None
+    def __iter__(self):
+        class_indices={}
+        for (index, (_, label)) in enumerate(self.data_source):
+            if label not in class_indices:
+                class_indices[label]=[]
+            class_indices[label].append(index)
+        
+        for label in class_indices:
+            random.shuffle(class_indices[label])
+        
+        self.permutation=[]
+        num_classes=len(class_indices)
+        for i in range(len(self.data_source)):
+            self.permutation.append(class_indices[i%num_classes][int(i/num_classes)])
+        yield from self.permutation
+        self.epoch=self.epoch+1
+
+
 trainset = torchvision.datasets.CIFAR10(
     root='./data', train=True, download=True, transform=transform_train)
 
@@ -97,6 +120,8 @@ elif sampling=="SS":
     custom_sampler = RandomSamplerSS(trainset)
 elif sampling=="SS_mix":
     custom_sampler = RandomSamplerSS_classmix(trainset)
+elif sampling=="RR_mix":
+    custom_sampler = RandomSamplerRR_classmix(trainset)
 elif sampling=="RR":
     custom_sampler = RandomSampler(data_source=trainset)
 else:
@@ -150,7 +175,10 @@ net = VGG(model, batchnorm)
 # net = ShuffleNetV2(1)
 # net = EfficientNetB0()
 # net = RegNetX_200MF()
+
+# model="SimpleDLA"
 # net = SimpleDLA()
+
 net = net.to(device)
 if device == 'cuda':
     net = torch.nn.DataParallel(net)
