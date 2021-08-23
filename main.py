@@ -108,6 +108,32 @@ class RandomSamplerRR_classmix(RandomSampler):
         yield from self.permutation
         self.epoch=self.epoch+1
 
+class RandomSamplerSGD_classmix(RandomSampler):
+    def __init__(self, train_dataset):
+        super().__init__(train_dataset)
+        self.epoch=1
+        self.permutation=None
+    def __iter__(self):
+        class_indices={}
+        for (index, (_, label)) in enumerate(self.data_source):
+            if label not in class_indices:
+                class_indices[label]=[]
+            class_indices[label].append(index)
+        
+        for label in class_indices:
+            random_indices = torch.randint(high=len(class_indices[label]), size=(len(class_indices[label]),), dtype=torch.int64, generator=self.generator).tolist()
+            temp_list=[]
+            for ind in random_indices:
+                temp_list.append(class_indices[label][ind])
+            class_indices[label]=temp_list
+        
+        self.permutation=[]
+        num_classes=len(class_indices)
+        for i in range(len(self.data_source)):
+            self.permutation.append(class_indices[i%num_classes][int(i/num_classes)])
+        yield from self.permutation
+        self.epoch=self.epoch+1
+
 
 trainset = torchvision.datasets.CIFAR10(
     root='./data', train=True, download=True, transform=transform_train)
@@ -122,6 +148,8 @@ elif sampling=="SS_mix":
     custom_sampler = RandomSamplerSS_classmix(trainset)
 elif sampling=="RR_mix":
     custom_sampler = RandomSamplerRR_classmix(trainset)
+elif sampling=="SGD_mix":
+    custom_sampler = RandomSamplerSGD_classmix(trainset)
 elif sampling=="RR":
     custom_sampler = RandomSampler(data_source=trainset)
 else:
