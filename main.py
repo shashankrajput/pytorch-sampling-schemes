@@ -39,6 +39,24 @@ class RandomSamplerSS(RandomSampler):
             yield from self.permutation
         self.epoch=self.epoch+1
 
+
+class RandomSamplerSS_flip(RandomSampler):
+    def __init__(self, train_dataset):
+        super().__init__(train_dataset)
+        self.epoch=1
+        self.permutation=None
+    def __iter__(self):
+        if self.epoch==1:
+            n = len(self.data_source)
+            generator = torch.Generator()
+            generator.manual_seed(int(torch.empty((), dtype=torch.int64).random_().item()))
+            self.permutation = torch.randperm(n, generator=generator).tolist()
+            yield from self.permutation
+        else:
+            self.permutation.reverse()
+            yield from self.permutation
+        self.epoch=self.epoch+1
+
 class RandomSamplerSS_classmix(RandomSampler):
     def __init__(self, train_dataset):
         super().__init__(train_dataset)
@@ -182,7 +200,7 @@ if model not in ['VGG11', 'VGG13', 'VGG16', 'VGG19']:
     raise ValueError("--model argument should be one of VGG11, VGG13, VGG16, or VGG19.")
 
 sampling = args.sampling
-if sampling not in ['RR', 'SS', 'SGD', 'RR_mix', 'SS_mix', 'SGD_mix']:
+if sampling not in ['RR', 'SS', 'SS_flip', 'SGD', 'RR_mix', 'SS_mix', 'SGD_mix']:
     raise ValueError("--sampling argument should be one of RR, SS, SGD, RR_mix, SS_mix, or SGD_mix.")
 
 batchnorm = args.batchnorm
@@ -201,8 +219,8 @@ print("Output will be written to "+filename)
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
-num_runs=3
-num_epochs=10
+num_runs=5
+num_epochs=300
 results={}
 with open(filename, 'w') as f:
     for run in range(num_runs):
@@ -231,6 +249,8 @@ with open(filename, 'w') as f:
             custom_sampler = RandomSampler(data_source=trainset, replacement=True)
         elif sampling=="SS":
             custom_sampler = RandomSamplerSS(trainset)
+        elif sampling=="SS_flip":
+            custom_sampler = RandomSamplerSS_flip(trainset)
         elif sampling=="SS_mix":
             custom_sampler = RandomSamplerSS_classmix(trainset)
         elif sampling=="RR_mix":
@@ -243,10 +263,10 @@ with open(filename, 'w') as f:
             raise ValueError("--sampling argument should be one of SGD, SS, or RR.")
 
         trainloader = torch.utils.data.DataLoader(
-            trainset, batch_size=128, sampler=custom_sampler, num_workers=2)
+            trainset, batch_size=125, sampler=custom_sampler, num_workers=2)
 
         trainloader_eval = torch.utils.data.DataLoader(
-            trainset, batch_size=128, shuffle=False, num_workers=2)
+            trainset, batch_size=125, shuffle=False, num_workers=2)
 
         testset = torchvision.datasets.CIFAR10(
             root='./data', train=False, download=True, transform=transform_test)
@@ -287,7 +307,7 @@ with open(filename, 'w') as f:
         criterion = nn.CrossEntropyLoss()
         optimizer = optim.SGD(net.parameters(), lr=args.lr,
                             momentum=0.9, weight_decay=5e-4)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
 
 
     
