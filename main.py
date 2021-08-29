@@ -57,6 +57,32 @@ class RandomSamplerSS_flip(RandomSampler):
             yield from self.permutation
         self.epoch=self.epoch+1
 
+class RandomSamplerSS_flip_mix(RandomSampler):
+    def __init__(self, train_dataset):
+        super().__init__(train_dataset)
+        self.epoch=1
+        self.permutation=None
+    def __iter__(self):
+        if self.epoch==1:
+            class_indices={}
+            for (index, (_, label)) in enumerate(self.data_source):
+                if label not in class_indices:
+                    class_indices[label]=[]
+                class_indices[label].append(index)
+            
+            for label in class_indices:
+                random.shuffle(class_indices[label])
+            
+            self.permutation=[]
+            num_classes=len(class_indices)
+            for i in range(len(self.data_source)):
+                self.permutation.append(class_indices[i%num_classes][int(i/num_classes)])
+            yield from self.permutation
+        else:
+            self.permutation.reverse()
+            yield from self.permutation
+        self.epoch=self.epoch+1
+
 class RandomSamplerSS_classmix(RandomSampler):
     def __init__(self, train_dataset):
         super().__init__(train_dataset)
@@ -79,6 +105,106 @@ class RandomSamplerSS_classmix(RandomSampler):
                 self.permutation.append(class_indices[i%num_classes][int(i/num_classes)])
             yield from self.permutation
         else:
+            yield from self.permutation
+        self.epoch=self.epoch+1
+
+class RandomSamplerSS_unmix(RandomSampler):
+    def __init__(self, train_dataset, batch_size, num_priority_classes, priority_probability):
+        super().__init__(train_dataset)
+        self.epoch=1
+        self.batch_size=batch_size
+        self.num_priority_classes=num_priority_classes
+        self.priority_probability=priority_probability
+        self.permutation=None
+    def __iter__(self):
+        if self.epoch==1:
+            class_indices={}
+            for (index, (_, label)) in enumerate(self.data_source):
+                if label not in class_indices:
+                    class_indices[label]=[]
+                class_indices[label].append(index)
+            
+            for label in class_indices:
+                random.shuffle(class_indices[label])
+            
+            self.permutation=[]
+            num_classes=len(class_indices)
+            class_list=list(range(num_classes))
+            priority_class_list=[]
+            for i in range(len(self.data_source)):
+                if i%self.batch_size==0:
+                    random.shuffle(class_list)
+                    priority_class_list=class_list[:self.num_priority_classes]
+            
+                flag=False
+                while (not flag):
+                    chosen_class=-1
+                    if (random.uniform(0,1) < self.priority_probability) and (len(priority_class_list)>0):
+                        chosen_class=random.choice(priority_class_list)
+                    else:
+                        chosen_class=random.choice(class_list)
+
+                    if len(class_indices[chosen_class])>0:
+                        flag=True
+                        self.permutation.append(class_indices[chosen_class].pop())
+                    else:
+                        class_list.remove(chosen_class)
+                        if chosen_class in priority_class_list:
+                            priority_class_list.remove(chosen_class)
+
+            yield from self.permutation
+        else:
+            yield from self.permutation
+        self.epoch=self.epoch+1
+
+
+class RandomSamplerSS_flip_unmix(RandomSampler):
+    def __init__(self, train_dataset, batch_size, num_priority_classes, priority_probability):
+        super().__init__(train_dataset)
+        self.epoch=1
+        self.batch_size=batch_size
+        self.num_priority_classes=num_priority_classes
+        self.priority_probability=priority_probability
+        self.permutation=None
+    def __iter__(self):
+        if self.epoch==1:
+            class_indices={}
+            for (index, (_, label)) in enumerate(self.data_source):
+                if label not in class_indices:
+                    class_indices[label]=[]
+                class_indices[label].append(index)
+            
+            for label in class_indices:
+                random.shuffle(class_indices[label])
+            
+            self.permutation=[]
+            num_classes=len(class_indices)
+            class_list=list(range(num_classes))
+            priority_class_list=[]
+            for i in range(len(self.data_source)):
+                if i%self.batch_size==0:
+                    random.shuffle(class_list)
+                    priority_class_list=class_list[:self.num_priority_classes]
+            
+                flag=False
+                while (not flag):
+                    chosen_class=-1
+                    if (random.uniform(0,1) < self.priority_probability) and (len(priority_class_list)>0):
+                        chosen_class=random.choice(priority_class_list)
+                    else:
+                        chosen_class=random.choice(class_list)
+
+                    if len(class_indices[chosen_class])>0:
+                        flag=True
+                        self.permutation.append(class_indices[chosen_class].pop())
+                    else:
+                        class_list.remove(chosen_class)
+                        if chosen_class in priority_class_list:
+                            priority_class_list.remove(chosen_class)
+
+            yield from self.permutation
+        else:
+            self.permutation.reverse()
             yield from self.permutation
         self.epoch=self.epoch+1
 
@@ -200,7 +326,7 @@ if model not in ['VGG11', 'VGG13', 'VGG16', 'VGG19']:
     raise ValueError("--model argument should be one of VGG11, VGG13, VGG16, or VGG19.")
 
 sampling = args.sampling
-if sampling not in ['RR', 'SS', 'SS_flip', 'SGD', 'RR_mix', 'SS_mix', 'SGD_mix']:
+if sampling not in ['RR', 'SS', 'SS_flip', 'SS_flip_mix', 'SS_unmix', 'SS_flip_unmix', 'SGD', 'RR_mix', 'SS_mix', 'SGD_mix']:
     raise ValueError("--sampling argument should be one of RR, SS, SGD, RR_mix, SS_mix, or SGD_mix.")
 
 batchnorm = args.batchnorm
@@ -213,15 +339,19 @@ if batchnorm:
     btnm='batchnorm_true'
 
 
-filename="./results/"+model+"_"+sampling+"_"+btnm
-print("Output will be written to "+filename)
+
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
-num_runs=5
+num_runs=3
 num_epochs=300
+num_priority_classes=10
+priority_probability=0.00
+batch_size=125
 results={}
+filename="./results_CIFAR100/"+model+"_"+sampling+"_"+btnm+"_"+str(num_priority_classes)+"_"+str(priority_probability)+"_lr"+str(args.lr)
+print("Output will be written to "+filename)
 with open(filename, 'w') as f:
     for run in range(num_runs):
         # Data
@@ -241,7 +371,7 @@ with open(filename, 'w') as f:
 
 
 
-        trainset = torchvision.datasets.CIFAR10(
+        trainset = torchvision.datasets.CIFAR100(
             root='./data', train=True, download=True, transform=transform_train)
 
         custom_sampler = None
@@ -251,8 +381,14 @@ with open(filename, 'w') as f:
             custom_sampler = RandomSamplerSS(trainset)
         elif sampling=="SS_flip":
             custom_sampler = RandomSamplerSS_flip(trainset)
+        elif sampling=="SS_flip_mix":
+            custom_sampler = RandomSamplerSS_flip_mix(trainset)
         elif sampling=="SS_mix":
             custom_sampler = RandomSamplerSS_classmix(trainset)
+        elif sampling=="SS_unmix":
+            custom_sampler = RandomSamplerSS_unmix(trainset, batch_size, num_priority_classes, priority_probability)
+        elif sampling=="SS_flip_unmix":
+            custom_sampler = RandomSamplerSS_flip_unmix(trainset, batch_size, num_priority_classes, priority_probability)
         elif sampling=="RR_mix":
             custom_sampler = RandomSamplerRR_classmix(trainset)
         elif sampling=="SGD_mix":
@@ -263,15 +399,15 @@ with open(filename, 'w') as f:
             raise ValueError("--sampling argument should be one of SGD, SS, or RR.")
 
         trainloader = torch.utils.data.DataLoader(
-            trainset, batch_size=125, sampler=custom_sampler, num_workers=2)
+            trainset, batch_size=batch_size, sampler=custom_sampler, num_workers=2)
 
         trainloader_eval = torch.utils.data.DataLoader(
-            trainset, batch_size=125, shuffle=False, num_workers=2)
+            trainset, batch_size=batch_size, shuffle=False, num_workers=2)
 
-        testset = torchvision.datasets.CIFAR10(
+        testset = torchvision.datasets.CIFAR100(
             root='./data', train=False, download=True, transform=transform_test)
         testloader = torch.utils.data.DataLoader(
-            testset, batch_size=100, shuffle=False, num_workers=2)
+            testset, batch_size=batch_size, shuffle=False, num_workers=2)
 
 
 
@@ -321,6 +457,10 @@ with open(filename, 'w') as f:
             epoch_result["Run"]=run
             epoch_result["Epoch"]=epoch
             epoch_result["Training Time"]=train_time
+            lr_list=[]
+            for param_group in optimizer.param_groups:
+                lr_list.append(param_group['lr'])
+            epoch_result["LR"]=lr_list
             epoch_result.update(evaluation)
         
             results[run][epoch]=epoch_result            
